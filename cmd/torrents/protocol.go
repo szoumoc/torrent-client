@@ -109,6 +109,7 @@ func udpTrackerRequest(announceURL string, infoHash []byte, length int) {
 		ip := net.IP(peersRaw[i : i+4])
 		port := binary.BigEndian.Uint16(peersRaw[i+4 : i+6])
 		fmt.Printf("%s:%d\n", ip.String(), port)
+		tcpTrackerRequest(u.String(), infoHash, length)
 	}
 }
 

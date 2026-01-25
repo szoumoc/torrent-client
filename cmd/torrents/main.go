@@ -13,7 +13,7 @@ import (
 const PeerID = "-GT0001-123456789012"
 
 func main() {
-	torrentFile := "/Users/szoumo/Downloads/big-buck-bunny.torrent"
+	torrentFile := "./cmd/file/deadpool2.torrent"
 	data, err := os.ReadFile(torrentFile)
 	if err != nil {
 		fmt.Printf("failed to read torrent file: %v\n", err)
