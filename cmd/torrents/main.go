@@ -1,82 +1,119 @@
 package main
 
 import (
+	"bytes"
 	"crypto/sha1"
 	"encoding/hex"
 	"fmt"
 	"os"
+	"strings"
 	"torrent/cmd/pkg/bencode"
 )
 
+const PeerID = "-GT0001-123456789012"
+
 func main() {
-	data, err := os.ReadFile("/Users/szoumo/Downloads/big-buck-bunny.torrent")
+	torrentFile := "/Users/szoumo/Downloads/big-buck-bunny.torrent"
+	data, err := os.ReadFile(torrentFile)
 	if err != nil {
-		panic(err)
+		fmt.Printf("failed to read torrent file: %v\n", err)
+		os.Exit(1)
 	}
 
-	announce, length, infoHash, info, err := ParseTorrent(data)
+	announces, length, infoHash, err := ParseTorrent(data)
 	if err != nil {
-		panic(err)
+		fmt.Printf("failed to parse torrent: %v\n", err)
+		os.Exit(1)
 	}
+
+	// Re-parsing the info map for piece extraction (since ParseTorrent returns simplified values)
+	val, _, _ := bencode.Decode(data)
+	root, _ := val.(map[string]interface{})
+	info, _ := root["info"].(map[string]interface{})
 
 	pieceLength, hashes, err := extractPieces(info)
-	if err != nil {
-		panic(err)
+	if err == nil {
+		fmt.Println("Trackers:", announces)
+		fmt.Println("Length:", length)
+		fmt.Println("Info Hash (hex):", hex.EncodeToString(infoHash))
+		fmt.Println("Piece Length:", pieceLength)
+		fmt.Println("Piece Hashes:", hashes[0], "...", hashes[len(hashes)-1])
 	}
 
-	fmt.Println("Tracker URL:", announce)
-	fmt.Println("Length:", length)
-	fmt.Println("Info Hash:", infoHash)
-	fmt.Println("Piece Length:", pieceLength)
-	fmt.Println("Piece Hashes:")
-	for _, h := range hashes {
-		fmt.Println(h)
+	for _, announce := range announces {
+		if strings.HasPrefix(announce, "udp://") {
+			udpTrackerRequest(announce, infoHash, length)
+		} else {
+			tcpTrackerRequest(announce, infoHash, length)
+		}
 	}
 }
 
-func ParseTorrent(data []byte) (string, int, string, map[string]interface{}, error) {
+func ParseTorrent(data []byte) ([]string, int, []byte, error) {
 	val, _, err := bencode.Decode(data)
 	if err != nil {
-		return "", 0, "", nil, err
+		return nil, 0, nil, err
 	}
 
 	root, ok := val.(map[string]interface{})
 	if !ok {
-		return "", 0, "", nil, fmt.Errorf("root is not dictionary")
+		return nil, 0, nil, fmt.Errorf("root is not dictionary")
 	}
 
-	announceBytes, ok := root["announce"].([]byte)
-	if !ok {
-		return "", 0, "", nil, fmt.Errorf("announce missing")
+	var announces []string
+	if announceList, ok := root["announce-list"].([]interface{}); ok {
+		for _, tier := range announceList {
+			if trackers, ok := tier.([]interface{}); ok {
+				for _, tracker := range trackers {
+					if tBytes, ok := tracker.([]byte); ok {
+						announces = append(announces, string(tBytes))
+					}
+				}
+			}
+		}
+	}
+
+	if len(announces) == 0 {
+		announceBytes, ok := root["announce"].([]byte)
+		if !ok {
+			return nil, 0, nil, fmt.Errorf("announce missing")
+		}
+		announces = append(announces, string(announceBytes))
 	}
 
 	info, ok := root["info"].(map[string]interface{})
 	if !ok {
-		return "", 0, "", nil, fmt.Errorf("info missing")
+		return nil, 0, nil, fmt.Errorf("info missing")
 	}
 
-	infoBytes, err := bencode.Encode(info)
-	if err != nil {
-		return "", 0, "", nil, err
+	// find raw bencoded "info" bytes in original torrent data
+	idx := bytes.Index(data, []byte("4:info"))
+	if idx < 0 {
+		return nil, 0, nil, fmt.Errorf("couldn't find info offset in torrent")
 	}
+	infoStart := idx + len("4:info")
+	_, consumed, err := bencode.Decode(data[infoStart:])
+	if err != nil {
+		return nil, 0, nil, fmt.Errorf("failed decoding raw info: %w", err)
+	}
+	infoBytes := data[infoStart : infoStart+consumed]
+
 	h := sha1.Sum(infoBytes)
-	infoHash := hex.EncodeToString(h[:])
+	infoHash := h[:]
 
 	length, err := extractLength(info)
 	if err != nil {
-		return "", 0, "", nil, err
+		return nil, 0, nil, err
 	}
 
-	return string(announceBytes), length, infoHash, info, nil
+	return announces, length, infoHash, nil
 }
 
 func extractLength(info map[string]interface{}) (int, error) {
-	// single-file torrent
 	if l, ok := info["length"].(int); ok {
 		return l, nil
 	}
 
-	// multi-file torrent
 	filesRaw, ok := info["files"].([]interface{})
 	if !ok {
 		return 0, fmt.Errorf("no length or files field")

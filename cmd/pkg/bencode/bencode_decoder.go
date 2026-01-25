@@ -3,12 +3,12 @@ package bencode
 
 import (
 	"fmt"
+	"io"
 	"log"
-	"os"
 	"strconv"
 )
 
-var logger = log.New(os.Stderr, "bencode: ", log.LstdFlags)
+var logger = log.New(io.Discard, "bencode: ", log.LstdFlags)
 
 func Decode(s []byte) (interface{}, int, error) {
 	if len(s) < 1 {
