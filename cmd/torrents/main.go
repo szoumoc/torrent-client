@@ -6,7 +6,6 @@ import (
 	"encoding/hex"
 	"fmt"
 	"os"
-	"strings"
 	"torrent/cmd/pkg/bencode"
 )
 
@@ -41,11 +40,11 @@ func main() {
 	}
 
 	for _, announce := range announces {
-		if strings.HasPrefix(announce, "udp://") {
-			udpTrackerRequest(announce, infoHash, length)
-		} else {
-			tcpTrackerRequest(announce, infoHash, length)
-		}
+		// if strings.HasPrefix(announce, "udp://") {
+		udpTrackerRequest(announce, infoHash, length)
+		// } else {
+		// 	tcpTrackerRequest(announce, infoHash, length)
+		// }
 	}
 }
 

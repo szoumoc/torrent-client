@@ -4,14 +4,11 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
-	"io"
 	"math/rand"
 	"net"
-	"net/http"
 	"net/url"
 	"strconv"
 	"time"
-	"torrent/cmd/pkg/bencode"
 )
 
 func udpTrackerRequest(announceURL string, infoHash []byte, length int) {
@@ -50,6 +47,7 @@ func udpTrackerRequest(announceURL string, infoHash []byte, length int) {
 
 	resp := make([]byte, 1024)
 	n, err := conn.Read(resp)
+	fmt.Printf("read %d bytes from connect response\n", n)
 	if err != nil {
 		fmt.Printf("failed to read connect response: %v\n", err)
 		return
@@ -109,49 +107,61 @@ func udpTrackerRequest(announceURL string, infoHash []byte, length int) {
 		ip := net.IP(peersRaw[i : i+4])
 		port := binary.BigEndian.Uint16(peersRaw[i+4 : i+6])
 		fmt.Printf("%s:%d\n", ip.String(), port)
-		tcpTrackerRequest(u.String(), infoHash, length)
+		peerConnect(ip.String() + ":" + strconv.Itoa(int(port)))
+		// peer := ip.String() + ":" + strconv.Itoa(int(port))
+		// tcpTrackerRequest(peer, infoHash, length)
 	}
 }
 
-func tcpTrackerRequest(announce string, infoHash []byte, length int) {
-	params := url.Values{}
-	params.Set("info_hash", string(infoHash))
-	params.Set("peer_id", PeerID)
-	params.Set("port", strconv.Itoa(6881))
-	params.Set("uploaded", "0")
-	params.Set("downloaded", "0")
-	params.Set("left", strconv.Itoa(length))
-	params.Set("compact", "1")
+// func tcpTrackerRequest(peer string, infoHash []byte, length int) {
+// 	params := url.Values{}
+// 	params.Set("info_hash", string(infoHash))
+// 	params.Set("peer_id", PeerID)
+// 	params.Set("port", strconv.Itoa(6881))
+// 	params.Set("uploaded", "0")
+// 	params.Set("downloaded", "0")
+// 	params.Set("left", strconv.Itoa(length))
+// 	params.Set("compact", "1")
 
-	u, _ := url.Parse(announce)
-	u.RawQuery = params.Encode()
+// 	u, _ := url.Parse("http://" + peer)
+// 	u.RawQuery = params.Encode()
 
-	resp, err := http.Get(u.String())
+// 	resp, err := http.Get(u.String())
+// 	if err != nil {
+// 		fmt.Printf("tracker request error: %v\n", err)
+// 		return
+// 	}
+// 	defer resp.Body.Close()
+
+// 	body, _ := io.ReadAll(resp.Body)
+// 	val, _, err := bencode.Decode(body)
+// 	if err != nil {
+// 		return
+// 	}
+
+// 	dict, ok := val.(map[string]interface{})
+// 	if !ok {
+// 		return
+// 	}
+
+// 	peersRaw, ok := dict["peers"].([]byte)
+// 	if !ok {
+// 		return
+// 	}
+
+// 	for i := 0; i+6 <= len(peersRaw); i += 6 {
+// 		ip := net.IP(peersRaw[i : i+4])
+// 		port := int(peersRaw[i+4])<<8 | int(peersRaw[i+5])
+// 		fmt.Printf("%s:%d\n", ip.String(), port)
+// 	}
+// }
+
+func peerConnect(peer string) {
+	conn, err := net.Dial("tcp", peer)
 	if err != nil {
-		fmt.Printf("tracker request error: %v\n", err)
+		fmt.Printf("failed to connect to peer: %v\n", err)
 		return
 	}
-	defer resp.Body.Close()
-
-	body, _ := io.ReadAll(resp.Body)
-	val, _, err := bencode.Decode(body)
-	if err != nil {
-		return
-	}
-
-	dict, ok := val.(map[string]interface{})
-	if !ok {
-		return
-	}
-
-	peersRaw, ok := dict["peers"].([]byte)
-	if !ok {
-		return
-	}
-
-	for i := 0; i+6 <= len(peersRaw); i += 6 {
-		ip := net.IP(peersRaw[i : i+4])
-		port := int(peersRaw[i+4])<<8 | int(peersRaw[i+5])
-		fmt.Printf("%s:%d\n", ip.String(), port)
-	}
+	fmt.Printf("connected to peer: %s\n", peer)
+	defer conn.Close()
 }
