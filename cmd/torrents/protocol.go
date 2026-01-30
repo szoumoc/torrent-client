@@ -4,11 +4,14 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
+	"io"
 	"math/rand"
 	"net"
+	"net/http"
 	"net/url"
 	"strconv"
 	"time"
+	"torrent/cmd/pkg/bencode"
 )
 
 func udpTrackerRequest(announceURL string, infoHash []byte, length int) {
@@ -23,6 +26,7 @@ func udpTrackerRequest(announceURL string, infoHash []byte, length int) {
 		fmt.Printf("failed to resolve UDP address: %v\n", err)
 		return
 	}
+	fmt.Printf("resolved UDP address: %s%s\n", u.Host, addr)
 
 	conn, err := net.DialUDP("udp", nil, addr)
 	if err != nil {
@@ -109,61 +113,109 @@ func udpTrackerRequest(announceURL string, infoHash []byte, length int) {
 		ip := net.IP(peersRaw[i : i+4])
 		port := binary.BigEndian.Uint16(peersRaw[i+4 : i+6])
 		fmt.Printf("%s:%d\n", ip.String(), port)
-		peerConnect(ip.String() + ":" + strconv.Itoa(int(port)))
-		// peer := ip.String() + ":" + strconv.Itoa(int(port))
-		// tcpTrackerRequest(peer, infoHash, length)
 	}
 }
 
-// func tcpTrackerRequest(peer string, infoHash []byte, length int) {
-// 	params := url.Values{}
-// 	params.Set("info_hash", string(infoHash))
-// 	params.Set("peer_id", PeerID)
-// 	params.Set("port", strconv.Itoa(6881))
-// 	params.Set("uploaded", "0")
-// 	params.Set("downloaded", "0")
-// 	params.Set("left", strconv.Itoa(length))
-// 	params.Set("compact", "1")
+func httpTrackerRequest(announceURL string, infoHash []byte, length int) {
+	u, err := url.Parse(announceURL)
+	if err != nil {
+		fmt.Printf("failed to parse announce URL: %v\n", err)
+		return
+	}
 
-// 	u, _ := url.Parse("http://" + peer)
-// 	u.RawQuery = params.Encode()
+	params := url.Values{}
+	params.Set("info_hash", string(infoHash))
+	params.Set("peer_id", PeerID)
+	params.Set("port", "6881")
+	params.Set("uploaded", "0")
+	params.Set("downloaded", "0")
+	params.Set("left", strconv.Itoa(length))
+	params.Set("compact", "1")
 
-// 	resp, err := http.Get(u.String())
-// 	if err != nil {
-// 		fmt.Printf("tracker request error: %v\n", err)
-// 		return
-// 	}
-// 	defer resp.Body.Close()
+	u.RawQuery = params.Encode()
 
-// 	body, _ := io.ReadAll(resp.Body)
-// 	val, _, err := bencode.Decode(body)
-// 	if err != nil {
-// 		return
-// 	}
+	resp, err := http.Get(u.String())
+	if err != nil {
+		fmt.Printf("tracker request error: %v\n", err)
+		return
+	}
+	defer resp.Body.Close()
 
-// 	dict, ok := val.(map[string]interface{})
-// 	if !ok {
-// 		return
-// 	}
+	if resp.StatusCode != http.StatusOK {
+		fmt.Printf("tracker returned status %d\n", resp.StatusCode)
+		return
+	}
 
-// 	peersRaw, ok := dict["peers"].([]byte)
-// 	if !ok {
-// 		return
-// 	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		fmt.Printf("failed to read tracker response: %v\n", err)
+		return
+	}
 
-// 	for i := 0; i+6 <= len(peersRaw); i += 6 {
-// 		ip := net.IP(peersRaw[i : i+4])
-// 		port := int(peersRaw[i+4])<<8 | int(peersRaw[i+5])
-// 		fmt.Printf("%s:%d\n", ip.String(), port)
-// 	}
-// }
+	val, _, err := bencode.Decode(body)
+	if err != nil {
+		fmt.Printf("failed to decode tracker response: %v\n", err)
+		return
+	}
 
-func peerConnect(peer string) {
-	conn, err := net.Dial("tcp", peer)
+	dict, ok := val.(map[string]interface{})
+	if !ok {
+		fmt.Println("tracker response is not a dictionary")
+		return
+	}
+
+	if failure, ok := dict["failure reason"].([]byte); ok {
+		fmt.Printf("tracker failure: %s\n", string(failure))
+		return
+	}
+
+	peersRaw, ok := dict["peers"].([]byte)
+	if !ok {
+		fmt.Println("peers field missing or not a string")
+		return
+	}
+
+	for i := 0; i+6 <= len(peersRaw); i += 6 {
+		ip := net.IP(peersRaw[i : i+4])
+		port := binary.BigEndian.Uint16(peersRaw[i+4 : i+6])
+		fmt.Printf("%s:%d\n", ip.String(), port)
+	}
+}
+
+func handshake(peer string, infoHash []byte) {
+	conn, err := net.DialTimeout("tcp", peer, 3*time.Second)
 	if err != nil {
 		fmt.Printf("failed to connect to peer: %v\n", err)
 		return
 	}
-	fmt.Printf("connected to peer: %s\n", peer)
 	defer conn.Close()
+
+	conn.SetDeadline(time.Now().Add(5 * time.Second))
+
+	// Assemble handshake message:
+	// 1 byte: length of protocol string (19)
+	// 19 bytes: protocol string ("BitTorrent protocol")
+	// 8 bytes: reserved (zeroes)
+	// 20 bytes: info hash
+	// 20 bytes: peer id
+	req := make([]byte, 68)
+	req[0] = 19
+	copy(req[1:20], "BitTorrent protocol")
+	// bytes 20-28 are reserved (zeroes)
+	copy(req[28:48], infoHash)
+	copy(req[48:68], []byte(PeerID))
+
+	if _, err := conn.Write(req); err != nil {
+		fmt.Printf("failed to write handshake: %v\n", err)
+		return
+	}
+
+	resp := make([]byte, 68)
+	if _, err := io.ReadFull(conn, resp); err != nil {
+		fmt.Printf("failed to read handshake response: %v\n", err)
+		return
+	}
+
+	remotePeerID := resp[48:68]
+	fmt.Printf("Peer ID: %x\n", remotePeerID)
 }

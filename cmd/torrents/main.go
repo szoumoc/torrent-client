@@ -6,13 +6,21 @@ import (
 	"encoding/hex"
 	"fmt"
 	"os"
+	"strings"
 	"torrent/cmd/pkg/bencode"
 )
 
 const PeerID = "-GT0001-123456789012"
 
 func main() {
-	torrentFile := "./cmd/file/deadpool2.torrent"
+	if len(os.Args) < 3 {
+		fmt.Println("Usage: ./your_program.sh <command> <torrent_file> [extra_args...]")
+		os.Exit(1)
+	}
+
+	command := os.Args[1]
+	torrentFile := os.Args[2]
+
 	data, err := os.ReadFile(torrentFile)
 	if err != nil {
 		fmt.Printf("failed to read torrent file: %v\n", err)
@@ -25,26 +33,39 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Re-parsing the info map for piece extraction (since ParseTorrent returns simplified values)
-	val, _, _ := bencode.Decode(data)
-	root, _ := val.(map[string]interface{})
-	info, _ := root["info"].(map[string]interface{})
-
-	pieceLength, hashes, err := extractPieces(info)
-	if err == nil {
+	switch command {
+	case "info":
 		fmt.Println("Trackers:", announces)
 		fmt.Println("Length:", length)
 		fmt.Println("Info Hash (hex):", hex.EncodeToString(infoHash))
+		// Re-parsing the info map for piece extraction
+		val, _, _ := bencode.Decode(data)
+		root, _ := val.(map[string]interface{})
+		info, _ := root["info"].(map[string]interface{})
+		pieceLength, hashes, _ := extractPieces(info)
 		fmt.Println("Piece Length:", pieceLength)
 		fmt.Println("Piece Hashes:", hashes[0], "...", hashes[len(hashes)-1])
-	}
 
-	for _, announce := range announces {
-		// if strings.HasPrefix(announce, "udp://") {
-		udpTrackerRequest(announce, infoHash, length)
-		// } else {
-		// 	tcpTrackerRequest(announce, infoHash, length)
-		// }
+	case "peers":
+		for _, announce := range announces {
+			if strings.HasPrefix(announce, "udp://") {
+				udpTrackerRequest(announce, infoHash, length)
+			} else {
+				httpTrackerRequest(announce, infoHash, length)
+			}
+		}
+
+	case "handshake":
+		if len(os.Args) < 4 {
+			fmt.Println("Usage: handshake <torrent_file> <peer_ip:port>")
+			os.Exit(1)
+		}
+		peer := os.Args[3]
+		handshake(peer, infoHash)
+
+	default:
+		fmt.Printf("unknown command: %s\n", command)
+		os.Exit(1)
 	}
 }
 
