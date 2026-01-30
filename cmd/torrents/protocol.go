@@ -92,6 +92,7 @@ func udpTrackerRequest(announceURL string, infoHash []byte, length int) {
 		fmt.Printf("failed to read announce response: %v\n", err)
 		return
 	}
+	fmt.Printf("read %d bytes from announce response\n", n)
 
 	if n < 20 {
 		return
@@ -101,6 +102,7 @@ func udpTrackerRequest(announceURL string, infoHash []byte, length int) {
 	if action != 1 {
 		return
 	}
+	fmt.Printf("action: %d\n", action)
 
 	peersRaw := resp[20:n]
 	for i := 0; i+6 <= len(peersRaw); i += 6 {
