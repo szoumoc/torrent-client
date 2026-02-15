@@ -6,31 +6,49 @@ import (
 	"encoding/hex"
 	"fmt"
 	"os"
-	"strings"
+	"strconv"
 	"torrent/cmd/pkg/bencode"
 )
 
-const PeerID = "-GT0001-123456789012"
-
 func main() {
+	fmt.Println("DEBUG ARGS:", os.Args)
 	if len(os.Args) < 3 {
 		fmt.Println("Usage: ./your_program.sh <command> <torrent_file> [extra_args...]")
 		os.Exit(1)
 	}
 
 	command := os.Args[1]
-	torrentFile := os.Args[2]
 
-	data, err := os.ReadFile(torrentFile)
-	if err != nil {
-		fmt.Printf("failed to read torrent file: %v\n", err)
-		os.Exit(1)
+	var torrentFile string
+	if command == "download_piece" {
+		if len(os.Args) < 5 {
+			// Let the case handle the error details or just safe guard here
+		} else {
+			torrentFile = os.Args[4]
+		}
+	} else if len(os.Args) >= 3 {
+		torrentFile = os.Args[2]
 	}
 
-	announces, length, infoHash, err := ParseTorrent(data)
-	if err != nil {
-		fmt.Printf("failed to parse torrent: %v\n", err)
-		os.Exit(1)
+	// We'll read and parse inside cases or just here if we have a file
+	var announces []string
+	var length int
+	var infoHash []byte
+	var data []byte
+	var err error
+
+	if torrentFile != "" {
+		data, err = os.ReadFile(torrentFile)
+		if err != nil {
+			fmt.Printf("failed to read torrent file: %v\n", err)
+			os.Exit(1)
+		}
+
+		announces, length, infoHash, err = ParseTorrent(data)
+		if err != nil {
+			fmt.Printf("failed to parse torrent: %v\n", err)
+			os.Exit(1)
+		}
 	}
 
 	switch command {
@@ -48,10 +66,14 @@ func main() {
 
 	case "peers":
 		for _, announce := range announces {
-			if strings.HasPrefix(announce, "udp://") {
-				udpTrackerRequest(announce, infoHash, length)
-			} else {
-				httpTrackerRequest(announce, infoHash, length)
+			peers, err := getPeers(announce, infoHash, length)
+			if err != nil {
+				// verify if we should print errors or just continue
+				// for this challenge, errors on some trackers are expected
+				continue
+			}
+			for _, peer := range peers {
+				fmt.Println(peer)
 			}
 		}
 
@@ -62,6 +84,57 @@ func main() {
 		}
 		peer := os.Args[3]
 		handshake(peer, infoHash)
+
+	case "download_piece":
+		if len(os.Args) < 6 || os.Args[2] != "-o" {
+			fmt.Println("Usage: download_piece -o <output_path> <torrent_file> <piece_index>")
+			os.Exit(1)
+		}
+		outputPath := os.Args[3]
+		torrentFile := os.Args[4]
+		pieceIndexStr := os.Args[5]
+		pieceIndex, err := strconv.Atoi(pieceIndexStr)
+		if err != nil {
+			fmt.Println("Invalid piece index")
+			os.Exit(1)
+		}
+
+		// Re-parse to ensure we have the correct file info for validation if needed
+		data, _ := os.ReadFile(torrentFile)
+		val, _, _ := bencode.Decode(data)
+		root, _ := val.(map[string]interface{})
+		info, _ := root["info"].(map[string]interface{})
+		pieceLength, _, _ := extractPieces(info)
+
+		// We need to find a peer first
+		// detailed logic will be inside downloadPiece which handles connection and download
+		// For this stage, we might need to reuse peer discovery or just pick one.
+		// The prompt implies we need to do discovery -> handshake -> download.
+		// Let's assume we pick the first available peer for now.
+		peer := ""
+		for _, announce := range announces {
+			peers, err := getPeers(announce, infoHash, length)
+			if err != nil {
+				fmt.Printf("Error getting peers from %s: %v\n", announce, err)
+				continue
+			}
+			if len(peers) > 0 {
+				peer = peers[0]
+				break
+			}
+		}
+
+		if peer == "" {
+			fmt.Println("No peers found")
+			os.Exit(1)
+		}
+
+		err = downloadPiece(peer, infoHash, pieceIndex, pieceLength, length, outputPath)
+		if err != nil {
+			fmt.Printf("Failed to download piece: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Printf("Piece %d downloaded to %s\n", pieceIndex, outputPath)
 
 	default:
 		fmt.Printf("unknown command: %s\n", command)
